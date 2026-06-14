@@ -2,6 +2,10 @@ local p = game.Players.LocalPlayer
 local g = Instance.new("ScreenGui", p.PlayerGui)
 g.ResetOnSpawn = false
 
+-- Armazenamento local das modificações
+local modifiedAttributes = {}
+local modifiedValues = {}
+
 local f = Instance.new("Frame", g)
 f.Size = UDim2.new(0, 260, 0, 320)
 f.Position = UDim2.new(0, 10, 0, 100)
@@ -16,7 +20,7 @@ r.Size = UDim2.new(.4, 0, 0, 20)
 r.Position = UDim2.new(.2, 0, 0, 0)
 r.Text = "REFRESH"
 
--- Dropdown for selection type
+-- Dropdown para seleção
 local dropdown = Instance.new("TextButton", f)
 dropdown.Size = UDim2.new(.4, 0, 0, 20)
 dropdown.Position = UDim2.new(.6, 0, 0, 0)
@@ -51,15 +55,13 @@ playersOption.Position = UDim2.new(0, 0, 0, 60)
 playersOption.Text = "Players"
 playersOption.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
 
-local selectionType = "tool" -- tool, inventory, map, players
+local selectionType = "tool"
 local selectedItem = nil
 
--- Toggle dropdown
 dropdown.MouseButton1Click:Connect(function()
     optionsFrame.Visible = not optionsFrame.Visible
 end)
 
--- Selection options
 toolOption.MouseButton1Click:Connect(function()
     selectionType = "tool"
     dropdown.Text = "Current Tool"
@@ -106,7 +108,52 @@ local function C(t)
     end)
 end
 
--- Function to inspect tools
+-- Função para obter valor modificado ou original
+local function getModifiedValue(obj, key, originalValue)
+    local objKey = tostring(obj)
+    if modifiedAttributes[objKey] and modifiedAttributes[objKey][key] then
+        return modifiedAttributes[objKey][key]
+    end
+    return originalValue
+end
+
+local function getModifiedValueBase(obj, originalValue)
+    local objKey = tostring(obj)
+    if modifiedValues[objKey] then
+        return modifiedValues[objKey]
+    end
+    return originalValue
+end
+
+-- Função para salvar modificação localmente
+local function saveModifiedAttribute(obj, key, value)
+    local objKey = tostring(obj)
+    if not modifiedAttributes[objKey] then
+        modifiedAttributes[objKey] = {}
+    end
+    modifiedAttributes[objKey][key] = value
+    -- Aplica localmente
+    pcall(function()
+        obj:SetAttribute(key, value)
+    end)
+end
+
+local function saveModifiedValue(obj, value, valueType)
+    local objKey = tostring(obj)
+    modifiedValues[objKey] = {value = value, type = valueType}
+    -- Aplica localmente
+    pcall(function()
+        if valueType == "StringValue" then
+            obj.Value = value
+        elseif valueType == "BoolValue" then
+            obj.Value = value == "true"
+        else
+            obj.Value = tonumber(value) or obj.Value
+        end
+    end)
+end
+
+-- Função para inspecionar tools
 local function inspectTool(t)
     local y = 0
     local nameBtn = Instance.new("TextButton", s)
@@ -123,23 +170,26 @@ local function inspectTool(t)
     cloneBtn.Position = UDim2.new(0, 0, 0, y)
     cloneBtn.Text = "CLONE TOOL"
     cloneBtn.MouseButton1Click:Connect(function()
-        t:Clone().Parent = p.Backpack
+        local clone = t:Clone()
+        clone.Parent = p.Backpack
     end)
     y = y + 24
 
     for a, v in pairs(t:GetAttributes()) do
+        local modifiedValue = getModifiedValue(t, a, v)
+        
         local label = Instance.new("TextButton", s)
         label.Size = UDim2.new(.4, 0, 0, 20)
         label.Position = UDim2.new(0, 0, 0, y)
         label.Text = a
         label.MouseButton1Click:Connect(function()
-            C(a .. ": " .. tostring(v))
+            C(a .. ": " .. tostring(modifiedValue))
         end)
 
         local edit = Instance.new("TextBox", s)
         edit.Size = UDim2.new(.6, 0, 0, 20)
         edit.Position = UDim2.new(.4, 0, 0, y)
-        edit.Text = tostring(v)
+        edit.Text = tostring(modifiedValue)
         edit.FocusLost:Connect(function()
             local nv = edit.Text
             if typeof(v) == "number" then
@@ -147,37 +197,33 @@ local function inspectTool(t)
             elseif typeof(v) == "boolean" then
                 nv = nv == "true"
             end
-            pcall(function()
-                t:SetAttribute(a, nv)
-            end)
+            saveModifiedAttribute(t, a, nv)
+            edit.Text = tostring(nv)
         end)
         y = y + 22
     end
 
     for _, d in ipairs(t:GetDescendants()) do
         if d:IsA("ValueBase") then
+            local modifiedVal = getModifiedValueBase(d, d.Value)
+            
             local label = Instance.new("TextButton", s)
             label.Size = UDim2.new(.4, 0, 0, 20)
             label.Position = UDim2.new(0, 0, 0, y)
             label.Text = d.Name
             label.MouseButton1Click:Connect(function()
-                C(d.Name .. ": " .. tostring(d.Value))
+                C(d.Name .. ": " .. tostring(modifiedVal))
             end)
 
             local edit = Instance.new("TextBox", s)
             edit.Size = UDim2.new(.6, 0, 0, 20)
             edit.Position = UDim2.new(.4, 0, 0, y)
-            edit.Text = tostring(d.Value)
+            edit.Text = tostring(modifiedVal)
             edit.FocusLost:Connect(function()
-                pcall(function()
-                    if d:IsA("StringValue") then
-                        d.Value = edit.Text
-                    elseif d:IsA("BoolValue") then
-                        d.Value = edit.Text == "true"
-                    else
-                        d.Value = tonumber(edit.Text) or d.Value
-                    end
-                end)
+                local newValue = edit.Text
+                local valueType = d.ClassName
+                saveModifiedValue(d, newValue, valueType)
+                edit.Text = newValue
             end)
             y = y + 22
         end
@@ -185,7 +231,7 @@ local function inspectTool(t)
     return y
 end
 
--- Function to inspect any item (for inventory and map)
+-- Função para inspecionar qualquer item
 local function inspectGenericItem(item)
     local y = 0
     local nameBtn = Instance.new("TextButton", s)
@@ -198,18 +244,20 @@ local function inspectGenericItem(item)
     y = y + 22
 
     for a, v in pairs(item:GetAttributes()) do
+        local modifiedValue = getModifiedValue(item, a, v)
+        
         local label = Instance.new("TextButton", s)
         label.Size = UDim2.new(.4, 0, 0, 20)
         label.Position = UDim2.new(0, 0, 0, y)
         label.Text = a
         label.MouseButton1Click:Connect(function()
-            C(a .. ": " .. tostring(v))
+            C(a .. ": " .. tostring(modifiedValue))
         end)
 
         local edit = Instance.new("TextBox", s)
         edit.Size = UDim2.new(.6, 0, 0, 20)
         edit.Position = UDim2.new(.4, 0, 0, y)
-        edit.Text = tostring(v)
+        edit.Text = tostring(modifiedValue)
         edit.FocusLost:Connect(function()
             local nv = edit.Text
             if typeof(v) == "number" then
@@ -217,16 +265,15 @@ local function inspectGenericItem(item)
             elseif typeof(v) == "boolean" then
                 nv = nv == "true"
             end
-            pcall(function()
-                item:SetAttribute(a, nv)
-            end)
+            saveModifiedAttribute(item, a, nv)
+            edit.Text = tostring(nv)
         end)
         y = y + 22
     end
     return y
 end
 
--- Function to inspect players
+-- Função para inspecionar players
 local function inspectPlayer(player)
     local y = 0
     local nameBtn = Instance.new("TextButton", s)
@@ -267,6 +314,50 @@ local function inspectPlayer(player)
     return y
 end
 
+-- Função para exportar todas as modificações (caso precise)
+function ExportModifications()
+    local export = {
+        attributes = modifiedAttributes,
+        values = modifiedValues
+    }
+    return export
+end
+
+-- Função para importar modificações (caso precise)
+function ImportModifications(data)
+    if data.attributes then
+        modifiedAttributes = data.attributes
+        for objKey, attrs in pairs(modifiedAttributes) do
+            for key, value in pairs(attrs) do
+                -- Tenta encontrar o objeto e aplicar
+                pcall(function()
+                    local obj = loadstring("return " .. objKey)()
+                    if obj then
+                        obj:SetAttribute(key, value)
+                    end
+                end)
+            end
+        end
+    end
+    if data.values then
+        modifiedValues = data.values
+        for objKey, valData in pairs(modifiedValues) do
+            pcall(function()
+                local obj = loadstring("return " .. objKey)()
+                if obj then
+                    if valData.type == "StringValue" then
+                        obj.Value = valData.value
+                    elseif valData.type == "BoolValue" then
+                        obj.Value = valData.value == "true"
+                    else
+                        obj.Value = tonumber(valData.value) or obj.Value
+                    end
+                end
+            end)
+        end
+    end
+end
+
 local function R()
     for _, v in ipairs(s:GetChildren()) do
         if v:IsA("GuiObject") then
@@ -303,7 +394,6 @@ local function R()
                 toolBtn.Text = tool.Name
                 toolBtn.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
                 toolBtn.MouseButton1Click:Connect(function()
-                    -- Expand to show tool details
                     for _, v in ipairs(s:GetChildren()) do
                         if v:IsA("GuiObject") then
                             v:Destroy()
@@ -346,7 +436,7 @@ local function R()
                     end)
                     y = y + 22
                     totalHeight = y
-                    if y >= 200 then break end -- Limit items shown
+                    if y >= 200 then break end
                 end
             end
         end
@@ -386,3 +476,11 @@ end
 
 r.MouseButton1Click:Connect(R)
 R()
+
+-- Adiciona funções globais para acessar as modificações se necessário
+_G.ToolInspector = {
+    Export = ExportModifications,
+    Import = ImportModifications,
+    GetModifiedAttributes = function() return modifiedAttributes end,
+    GetModifiedValues = function() return modifiedValues end
+}
